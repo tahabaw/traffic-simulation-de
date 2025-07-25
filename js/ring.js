@@ -1,582 +1,816 @@
 /* ######################################################################
-Source code for the interactive Javascript simulation at traffic-simulation.de
+Enhanced Ring Road Traffic Simulation with RL Control
+Cleaned and optimized version for stop-and-go traffic research
 
-    Copyright (C) 2024  Martin Treiber
-
-    This program is free software: you can redistribute it and/or modify
-    it under the terms of the GNU General Public License Version 3
-    as published by the Free Software Foundation.
-
-    This program is distributed in the hope that it will be useful,
-    but WITHOUT ANY WARRANTY; without even the implied warranty of
-    MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-    GNU General Public License for more details.
-
-    You should have received a copy of the GNU General Public License
-    along with this program.  If not, see <https://www.gnu.org/licenses/>.
-
-    Martin Treiber
-   
-    mail@martin-treiber.de
+Copyright (C) 2024 Martin Treiber
+Enhanced for research purposes
 #######################################################################*/
 
 //#############################################################
-// constants
+// Core Constants and Configuration
 //#############################################################
 
-const REFSIZE=300;
-const REFSIZE_SMARTPHONE=200;
+// RL Agent and Control Variables
+let rlAgent;
+let lastState = null;
+let lastAction = 0;
+let useIDM = false; // Hybrid control flag
+let isRecording = false;
+let recordingData = [];
+let targetVehicleId = null;
+let vehicleLoopCounts = new Map();
+let lastPositions = new Map();
 
+// Simulation Constants
+const REFSIZE = 300;
+const REFSIZE_SMARTPHONE = 200;
 
-//#############################################################
-// general ui settings
-//#############################################################
-
-const userCanDropObjects=true;
-var showCoords=true;  // show logical coords of nearest road to mouse pointer
-                      // definition => showLogicalCoords(.) in canvas_gui.js
-
-//#############################################################
-// general debug settings (set=false for public deployment)
-//#############################################################
-
-drawVehIDs=false; // override control_gui.js
-drawRoadIDs=false; // override control_gui.js
-var debug=false;
-var crashinfo=new CrashInfo();
-
+// Vehicle tracking for stop-and-go analysis
+let veh200Distance = 0;
+let lastVeh200Pos = null;
 
 //#############################################################
-// stochasticity settings (acceleration noise spec at top of models.js)
+// Initialization
 //#############################################################
 
-var driver_varcoeff=0.15; //v0 and a coeff of variation (of "agility")
-                          // need later override road setting by
-                          // calling road.setDriverVariation(.); 
-
+window.onload = () => {
+    rlAgent = new DQNAgent(3, [-1.5, 0, 1.5]);
+    rlAgent.loadModel().then(() => {
+        updateModelSizeDisplay();
+    });
+    
+    // Update model size display periodically
+    setInterval(updateModelSizeDisplay, 1000);
+    
+    // Auto-save model every 60 seconds
+    setInterval(() => {
+        if (rlAgent) rlAgent.saveModel();
+    }, 60000);
+};
 
 //#############################################################
-// override standard settings control_gui.js
+// UI Settings and Debug Configuration
 //#############################################################
 
-density=0.03;  // default 0.03
-setSlider(slider_density, slider_densityVal, 1000*density, 0, "veh/km");
+const userCanDropObjects = true;
+var showCoords = true;
 
-fracTruck=0.1; // default 0.1 
-setSlider(slider_fracTruck, slider_fracTruckVal, 100*fracTruck, 0, "%");
-fracTruckToleratedMismatch=0.02; // avoid sudden changes in open systems
+//#############################################################
+// Traffic Parameters
+//#############################################################
 
+var driver_varcoeff = 0.15; // Driver variability coefficient
 
-/*######################################################
- Global overall scenario settings and graphics objects
- see onramp.js for more details
+// Override default density settings for stop-and-go research
+density = 0.03;
+setSlider(slider_density, slider_densityVal, 1000 * density, 0, "veh/km");
 
- refSizePhys  => reference size in m (generally smaller side of canvas)
- refSizePix   => reference size in pixel (generally smaller side of canvas)
- scale = refSizePix/refSizePhys 
-       => roads have full canvas regardless of refSizePhys, refSizePix
+fracTruck = 0.1;
+setSlider(slider_fracTruck, slider_fracTruckVal, 100 * fracTruck, 0, "%");
+fracTruckToleratedMismatch = 0.02;
 
- (1) refSizePix=Math.min(canvas.width, canvas.height) determined during run  
+//#############################################################
+// Scenario Setup and Graphics
+//#############################################################
 
- (2) refSizePhys smaller  => all phys roadlengths smaller
-  => vehicles and road widths appear bigger for a given screen size 
-  => chose smaller for mobile
-######################################################*
-*/
+var scenarioString = "Ring";
+console.log("Initializing Ring Road Simulation for Stop-and-Go Research");
 
+// Canvas setup
+var simDivWindow = document.getElementById("contents");
+var canvas = document.getElementById("canvas");
+var ctx = canvas.getContext("2d");
+canvas.width = simDivWindow.clientWidth;
+canvas.height = simDivWindow.clientHeight;
+var aspectRatio = canvas.width / canvas.height;
 
-// Global overall scenario settings and graphics objects
-
-
-var scenarioString="Ring";
-console.log("\n\nstart main: scenarioString=",scenarioString);
-
-var simDivWindow=document.getElementById("contents");
-   // following cmd defines also mouse listeners from html 
-var canvas = document.getElementById("canvas"); 
-var ctx = canvas.getContext("2d"); // graphics context
-canvas.width  = simDivWindow.clientWidth; 
-canvas.height  = simDivWindow.clientHeight;
-var aspectRatio=canvas.width/canvas.height;
-
-console.log("before addTouchListeners()");
+console.log("Adding touch listeners...");
 addTouchListeners();
-console.log("after addTouchListeners()");
 
-//##################################################################
-// overall scaling (critAspectRatio should be consistent with 
-// width/height in css.#contents)
-//##################################################################
+//#############################################################
+// Scaling and Responsive Design
+//#############################################################
 
-var isSmartphone=mqSmartphone();
+var isSmartphone = mqSmartphone();
+var refSizePhys = isSmartphone ? REFSIZE_SMARTPHONE : REFSIZE;
+var critAspectRatio = 120. / 95.;
+var refSizePix = Math.min(canvas.height, canvas.width / critAspectRatio);
+var scale = refSizePix / refSizePhys;
 
-var refSizePhys=(isSmartphone) ? REFSIZE_SMARTPHONE : REFSIZE; 
+//#############################################################
+// Physical Road Geometry
+//#############################################################
 
-var critAspectRatio=120./95.; // from css file width/height of #contents
+var center_xRel = 0.5;
+var center_yRel = -0.54;
+var roadRadiusRel = 0.42;
 
-var refSizePix=Math.min(canvas.height,canvas.width/critAspectRatio);
-var scale=refSizePix/refSizePhys;
+// Physical geometry settings [m]
+var center_xPhys = center_xRel * refSizePhys;
+var center_yPhys = center_yRel * refSizePhys;
+var roadRadius = roadRadiusRel * refSizePhys;
+var mainroadLen = roadRadius * 2 * Math.PI;
 
-
-
-//##################################################################
-// Specification of physical road geometry and vehicle properties
-// If refSizePhys changes, change them all => updateDimensions();
-//##################################################################
-
-// all relative "Rel" settings with respect to refSizePhys, not refSizePix!
-
-
-var center_xRel=0.5;
-var center_yRel=-0.54;
-var roadRadiusRel=0.42;
-
-
-// physical geometry settings [m]
-
-var center_xPhys=center_xRel*refSizePhys; //[m]
-var center_yPhys=center_yRel*refSizePhys;
-var roadRadius=roadRadiusRel*refSizePhys;
-var mainroadLen=roadRadius*2*Math.PI;
-
-// !! slightdouble-coding necessary unless big changes, 
-// I have checked this...
-
-function updateDimensions(){ // if viewport or sizePhys changed
-  refSizePhys=(isSmartphone) ? REFSIZE_SMARTPHONE : REFSIZE; 
-    center_xPhys=center_xRel*refSizePhys; //[m]
-    center_yPhys=center_yRel*refSizePhys;
-    roadRadius=roadRadiusRel*refSizePhys;
-    mainroadLen=roadRadius*2*Math.PI;
+function updateDimensions() {
+    refSizePhys = isSmartphone ? REFSIZE_SMARTPHONE : REFSIZE;
+    center_xPhys = center_xRel * refSizePhys;
+    center_yPhys = center_yRel * refSizePhys;
+    roadRadius = roadRadiusRel * refSizePhys;
+    mainroadLen = roadRadius * 2 * Math.PI;
 }
 
+// Vehicle and road dimensions
+var laneWidth = 8;
+var nLanes_main = 1;
+var car_length = 7;
+var car_width = 6;
+var truck_length = 15;
+var truck_width = 7;
 
-// the following remains constant 
-// => road becomes more compact for smaller screens
-
-var laneWidth=8; // remains constant => road becomes more compact for smaller
-var nLanes_main=3;
-
-var car_length=7; // car length in m
-var car_width=6; // car width in m
-var truck_length=15; // trucks
-var truck_width=7; 
-
-
-// on constructing road, road elements are gridded and interna
-// road.traj_xy(u) are generated. The, traj_xy*Init(u) obsolete
-
-function trajIn_x(u){
-    return center_xPhys + roadRadius*Math.cos(u/roadRadius);
+// Road trajectory functions
+function trajIn_x(u) {
+    return center_xPhys + roadRadius * Math.cos(u / roadRadius);
 }
 
-function trajIn_y(u){
-    return center_yPhys + roadRadius*Math.sin(u/roadRadius);
+function trajIn_y(u) {
+    return center_yPhys + roadRadius * Math.sin(u / roadRadius);
 }
 
-var trajIn=[trajIn_x,trajIn_y];
+var trajIn = [trajIn_x, trajIn_y];
 
-//##################################################################
-// Specification of logical road 
-//##################################################################
+//#############################################################
+// Road Network Setup
+//#############################################################
 
-var isRing=true;  // 0: false; 1: true
-var roadID=1;
-speedInit=20; // IC for speed
-var mainroad=new road(roadID,mainroadLen,laneWidth,nLanes_main,trajIn,
-		      density,speedInit,fracTruck,isRing);
+var isRing = true;
+var roadID = 1;
+var speedInit = 20;
+var mainroad = new road(roadID, mainroadLen, laneWidth, nLanes_main, trajIn,
+    density, speedInit, fracTruck, isRing);
 
-mainroad.setDriverVariation(driver_varcoeff); //!!!
+mainroad.setDriverVariation(driver_varcoeff);
+network[0] = mainroad;
+network[0].drawVehIDs = drawVehIDs;
 
-network[0]=mainroad;  // network declared in canvas_gui.js
-network[0].drawVehIDs=drawVehIDs;
-
-
-//  introduce stationary detectors
-
-var detectors=[];
-for(var idet=0; idet<4; idet++){
-  detectors[idet]=new stationaryDetector(mainroad,
-					  (0.125+idet*0.25)*mainroadLen,10);
+// Traffic detectors for flow analysis
+var detectors = [];
+for (var idet = 0; idet < 4; idet++) {
+    detectors[idet] = new stationaryDetector(mainroad,
+        (0.125 + idet * 0.25) * mainroadLen, 10);
 }
 
+//#############################################################
+// Model Initialization
+//#############################################################
 
-//#########################################################
-// model initialization (models and methods override control_gui.js)
-//#########################################################
-	
-updateModels(); // defines longModelCar,-Truck,LCModelCar,-Truck,-Mandatory
+updateModels(); // Initialize car/truck models and lane-changing behavior
 
+//#############################################################
+// Graphics Configuration
+//#############################################################
 
-//####################################################################
-// Global graphics specification
-//####################################################################
+var hasChanged = true;
+var drawBackground = true;
+var drawRoad = true;
+var userCanvasManip = false;
+var drawColormap = false;
+var vmin_col = 0;
+var vmax_col = 100 / 3.6;
 
+//#############################################################
+// Image Loading
+//#############################################################
 
-// graphical settings
-
-var hasChanged=true; // window dimensions have changed (responsive design)
-
-var drawBackground=true; // if false, default unicolor background
-var drawRoad=true; // if false, only vehicles are drawn
-var userCanvasManip=false; //!! true only if user-driven geometry changes
-
-var drawColormap=false;
-var vmin_col=0; // min speed for speed colormap (drawn in red)
-var vmax_col=100/3.6; // max speed for speed colormap (drawn in blue-violet)
-
-
-
-//####################################################################
-// Images
-//####################################################################
-
-
-// init background image
-
+// Background
 var background = new Image();
-background.src ='figs/backgroundGrass.jpg'; 
- 
+background.src = 'figs/backgroundGrass.jpg';
 
-// init vehicle image(s)
-
+// Vehicles
 carImg = new Image();
 carImg.src = 'figs/blackCarCropped.gif';
 truckImg = new Image();
 truckImg.src = 'figs/truck1Small.png';
 
-
-// init traffic light images
-
+// Traffic lights
 traffLightRedImg = new Image();
-traffLightRedImg.src='figs/trafficLightRed_affine.png';
+traffLightRedImg.src = 'figs/trafficLightRed_affine.png';
 traffLightGreenImg = new Image();
-traffLightGreenImg.src='figs/trafficLightGreen_affine.png';
+traffLightGreenImg.src = 'figs/trafficLightGreen_affine.png';
 
-
-
-obstacleImgNames = []; // srcFiles[0]='figs/obstacleImg.png'
-obstacleImgs = []; // srcFiles[0]='figs/obstacleImg.png'
-for (var i=0; i<10; i++){
-  obstacleImgs[i]=new Image();
-  obstacleImgs[i].src = (i==0)
-    ? "figs/obstacleImg.png"
-    : "figs/constructionVeh"+(i)+".png";
-  obstacleImgNames[i] = obstacleImgs[i].src;
+// Obstacles
+obstacleImgNames = [];
+obstacleImgs = [];
+for (var i = 0; i < 10; i++) {
+    obstacleImgs[i] = new Image();
+    obstacleImgs[i].src = (i == 0)
+        ? "figs/obstacleImg.png"
+        : "figs/constructionVeh" + (i) + ".png";
+    obstacleImgNames[i] = obstacleImgs[i].src;
 }
 
+// Road images
+roadImgs1 = [];
+roadImgs2 = [];
 
-// init road images
-
-roadImgs1 = []; // road with lane separating line
-roadImgs2 = []; // road without lane separating line
-
-for (var i=0; i<4; i++){
-    roadImgs1[i]=new Image();
-    roadImgs1[i].src="figs/road"+(i+1)+"lanesCropWith.png"
-    roadImgs2[i]=new Image();
-    roadImgs2[i].src="figs/road"+(i+1)+"lanesCropWithout.png"
+for (var i = 0; i < 4; i++) {
+    roadImgs1[i] = new Image();
+    roadImgs1[i].src = "figs/road" + (i + 1) + "lanesCropWith.png"
+    roadImgs2[i] = new Image();
+    roadImgs2[i].src = "figs/road" + (i + 1) + "lanesCropWithout.png"
 }
 
 roadImg1 = new Image();
-roadImg1=roadImgs1[nLanes_main-1];
+roadImg1 = roadImgs1[nLanes_main - 1];
 roadImg2 = new Image();
-roadImg2=roadImgs2[nLanes_main-1];
+roadImg2 = roadImgs2[nLanes_main - 1];
 
+//#############################################################
+// Traffic Objects and Control
+//#############################################################
 
+var trafficObjs = new TrafficObjects(canvas, 2, 2, 0.40, 0.50, 3, 2);
+var trafficLightControl = new TrafficLightControlEditor(trafficObjs, 0.33, 0.68);
 
+//#############################################################
+// Simulation Runtime Variables
+//#############################################################
 
-//############################################
-// traffic objects
-//############################################
+var time = 0;
+var itime = 0;
+var fps = 30;
+var dt = timewarp / fps;
 
-// TrafficObjects(canvas,nTL,nLimit,xRelDepot,yRelDepot,nRow,nCol)
-var trafficObjs=new TrafficObjects(canvas,2,2,0.40,0.50,3,2);
+//#############################################################
+// Vehicle Loop Tracking Functions
+//#############################################################
 
-// xxxNew
-var trafficLightControl=new TrafficLightControlEditor(trafficObjs,0.33,0.68);
+function updateLoopCount(vehicleId, currentPosition) {
+    const lastPos = lastPositions.get(vehicleId) || 0;
+    const currentLoops = vehicleLoopCounts.get(vehicleId) || 0;
 
-
-//############################################
-// run-time specification and functions
-//############################################
-
-var time=0;
-var itime=0;
-var fps=30; // frames per second (unchanged during runtime)
-var dt=timewarp/fps;
-
-
-//############################################
-function updateSim(){
-//############################################
-
-  // (1) update times 
-
-  time +=dt; // dt depends on timewarp slider (fps=const)
-  itime++;
-
-  // (1b) update global geometry, and traffic objects
-  // (in most other scenarios geometry changes follow)
-  
-  isSmartphone=mqSmartphone(); 
-
-  // test code at point (5)
-
-  
-  // (2) transfer effects from slider interaction and mandatory regions
-  // to the vehicles and models
-  // longModelCar etc defined in control_gui.js
-
-  
-
-  mainroad.updateTruckFrac(fracTruck, fracTruckToleratedMismatch);
-  mainroad.updateModelsOfAllVehicles(longModelCar,longModelTruck,
-				       LCModelCar,LCModelTruck,
-				       LCModelMandatory);
-  mainroad.updateDensity(density);
-
-  
-  // (2a) update moveable speed limits
-
-  mainroad.updateSpeedlimits(trafficObjs); 
-
-
-    // (2b) do central simulation update of vehicles
-
-  mainroad.updateLastLCtimes(dt);
-  mainroad.calcAccelerations();  
-  mainroad.changeLanes();      //!!! ideally do MOBIL with determ accel    
-  mainroad.updateSpeedPositions();
-
-    //if(itime<2){mainroad.writeVehicleLongModels();}
-    //if(itime<2){mainroad.writeVehicleLCModels();}
-
-  for(var iDet=0; iDet<detectors.length; iDet++){
-	detectors[iDet].update(time,dt);
-  }
-  
-  if(userCanDropObjects&&(!isSmartphone)&&(!trafficObjPicked)){
-    trafficObjs.zoomBack();
-  }
-
-
-  //##############################################################
-  // (5) debug output
-  //##############################################################
-
-  if(false){
-    debugVeh(211,network);
-    debugVeh(212,network);
-  }
-  
-  if(debug){crashinfo.checkForCrashes(network);} //!! deact for production
-  
-  if(false){
-    mainroad.writeTrucksLC();
-    //mainroad.writeVehicleLCModels();
-
-  }
-
-  // 
-
-  if(false){//!!
-
-    //!! in different road operations (setSpeedlimit) order of
-    // trafficObjs.trafficObj array changed in increasing u
-    // can only select unique trafficObj at initialization or, as here,
-    // when filtering for attributes
-
-    var TL;
-    for(var iobj=0; iobj<trafficObjs.trafficObj.length; iobj++){
-      if(trafficObjs.trafficObj[iobj].id==100){// first TL
-	TL=trafficObjs.trafficObj[iobj];
-      }
-    }
-    //var TL=trafficObjs.trafficObj.slice(0,2);  // last index not included
-
-    // drop red traffic light (dropObject includes activate)
-
-    if(itime==1){
-      var udrop=0.25*network[0].roadLen;
-      trafficObjs.setTrafficLight(TL,"red");
-      trafficObjs.dropObject(TL,network,
-			     network[0].traj[0](udrop),
-			     network[0].traj[1](udrop),
-			     20,);
+    // Detect loop completion (position reset from high to low)
+    if (lastPos > mainroadLen * 0.8 && currentPosition < mainroadLen * 0.2) {
+        vehicleLoopCounts.set(vehicleId, currentLoops + 1);
+        console.log(`Vehicle ${vehicleId} completed loop ${currentLoops + 1}`);
     }
 
-    // switch TL to greem
-
-    if(itime==100){
-      console.log("set first TL to green");
-      trafficObjs.setTrafficLight(TL,"green");
-    }
-  }
-
-
-}// updateSim
-
-
-
-
-
-
-
-
-//##################################################
-function drawSim() {
-//##################################################
-
-
-
-
-    // (0) reposition physical x center coordinate as response
-    // to viewport size (changes)
-    // isSmartphone defined in updateSim
- 
-
- 
-    var relTextsize_vmin=(isSmartphone) ? 0.03 : 0.02;
-    var textsize=relTextsize_vmin*Math.min(canvas.width,canvas.height);
-    //console.log("isSmartphone=",isSmartphone);
-
-    if(false){console.log(" new total inner window dimension: ",
-		window.innerWidth," X ",window.innerHeight,
-		" (full hd 16:9 e.g., 1120:630)",
-		" canvas: ",canvas.width," X ",canvas.height);
-	     }
-
-
-    if ((canvas.width!=simDivWindow.clientWidth)
-	||(canvas.height != simDivWindow.clientHeight)){
-	hasChanged=true;
-	canvas.width  = simDivWindow.clientWidth;
-        canvas.height  = simDivWindow.clientHeight;
-	aspectRatio=canvas.width/canvas.height;
-	refSizePix=Math.min(canvas.height,canvas.width/critAspectRatio);
-
-	scale=refSizePix/refSizePhys; // refSizePhys=constant unless mobile
-
-      updateDimensions();
-      trafficObjs.calcDepotPositions(canvas); 
-
-    }
-
- 
-
-  // (1) update heading of all vehicles rel. to road axis
-  // (for some reason, strange rotations at beginning)
-
-    
-
- 
-  // (2) reset transform matrix and draw background
-  // (only needed if changes, plus "reminders" for lazy browsers)
-
-  ctx.setTransform(1,0,0,1,0,0);
-  if(drawBackground){
-    if(hasChanged||(itime<=10) || (itime%50==0) || userCanvasManip
-      || (!drawRoad)||drawVehIDs){
-      ctx.drawImage(background,0,0,canvas.width,canvas.height);
-    }
-  }
-
-  // (3) draw road and possibly traffic lights afterwards (before vehs)
- 
-  var changedGeometry=userCanvasManip || hasChanged||(itime<=1);
-  mainroad.draw(roadImg1,roadImg2,changedGeometry);
-  if(drawRoadIDs){mainroad.drawRoadID();}
-  
-    // (4) draw vehicles
-
-  mainroad.drawVehicles(carImg,truckImg,obstacleImgs,vmin_col,vmax_col);
-
-  // (5a) draw traffic objects 
-
-  if(userCanDropObjects&&(!isSmartphone)){
-    trafficObjs.draw();
-  }
-
-  // (5b) draw speedlimit-change select box
-
-  ctx.setTransform(1,0,0,1,0,0); 
-  drawSpeedlBox();
- 
-
-    // (6) draw simulated time and detector displays
-
-  displayTime(time,textsize);
-  for(var iDet=0; iDet<detectors.length; iDet++){
-	detectors[iDet].display(textsize);
-  }
-
-  // (6a) show scale info
-  // get from onramp.js if needed
-  
-
-
-  // (6b) draw the speed colormap
-  //!! Now always false; drawn statically by html file!
-
-  if(drawColormap){
-    displayColormap(scale*(center_xPhys-0.03*roadRadius),
-                    -scale*(center_yPhys+0.50*roadRadius), 
-		    scale*35, scale*45,
-		    vmin_col,vmax_col,0,100/3.6);
-  }
-
-  // drawSim (7): show logical coordinates if activated
-
-  if(showCoords&&mouseInside){
-    showLogicalCoords(xPixUser,yPixUser);
-  }
-
-  
-  // (8) xxxNew draw TL editor panel
-
-  if(trafficLightControl.isActive){
-    trafficLightControl.showEditPanel();
-  }
-
-  // may be set to true in next step if changed canvas 
-  // or old sign should be wiped away 
-  hasChanged=false; 
-
-    // revert to neutral transformation at the end!
-  ctx.setTransform(1,0,0,1,0,0); 
-
-} //drawSim
- 
-
-
-
-//##################################################
-// Running function of the sim thread (triggered by setInterval)
-//##################################################
-
-function main_loop() {
-
-  updateSim();
-  drawSim();
-
- 
+    lastPositions.set(vehicleId, currentPosition);
 }
 
+function getContinuousPosition(vehicleId, currentPosition) {
+    const loops = vehicleLoopCounts.get(vehicleId) || 0;
+    return loops * mainroadLen + currentPosition;
+}
 
+//#############################################################
+// Core Simulation Update Function
+//#############################################################
 
- //############################################
-// start the simulation thread
-// THIS function does all the things; everything else 
-// only functions/definitions
-// triggers:
-// (i) automatically when loading the simulation 
-// (ii) when pressing the start button defined in onramp_gui.js
-//  ("myRun=setInterval(main_loop, 1000/fps);")
-//############################################
+function updateSim() {
+    // Update time
+    time += dt;
+    itime++;
 
-console.log("first main execution");
-showInfo();//!!!! change to showInfoString() plus strings defined inline or as extra .js scripts to be included: works also locally. See golfCourse.js. Also the command "showInfoString should be placed in control_gui.js;
+    // Update geometry for responsive design
+    isSmartphone = mqSmartphone();
 
-var myRun=setInterval(main_loop, 1000/fps); 
+    // Update vehicle models and road properties
+    mainroad.updateTruckFrac(fracTruck, fracTruckToleratedMismatch);
+    mainroad.updateModelsOfAllVehicles(longModelCar, longModelTruck,
+        LCModelCar, LCModelTruck, LCModelMandatory);
+    mainroad.updateDensity(density);
+    mainroad.updateSpeedlimits(trafficObjs);
 
+    // Core vehicle dynamics update
+    mainroad.updateLastLCtimes(dt);
+    mainroad.calcAccelerations();
+
+    // RL Control Logic for Stop-and-Go Analysis
+    let veh200 = mainroad.veh.find(v => v.id === 200);
+    let veh222 = mainroad.veh.find(v => v.id === 222);
+    let veh201 = mainroad.veh.find(v => v.id === 201);
+
+    if (veh200 && veh222) {
+        let dx = veh222.u - veh200.u;
+        if (dx < 0) dx += mainroadLen;
+        let gap = dx - veh222.length;
+    if (veh201 && rlAgent && itime > 10) {
+        applyRLControl(veh200, veh201, veh222);
+        }
+
+    }
+
+    // Update vehicle positions and lane changes
+    mainroad.changeLanes();
+    mainroad.updateSpeedPositions();
+
+    // Update UI displays
+    if (veh200 && veh222) {
+        let dx = veh222.u - veh200.u;
+        if (dx < 0) dx += mainroadLen;
+        const gap = dx - 7; // assuming 7m car length
+        const laps = vehicleLoopCounts.get(200) || 0;
+        updateGapAndLapUI(gap, laps);
+    }
+
+    // Update vehicle list periodically
+    if (itime % 30 === 0) {
+        updateVehicleList();
+    }
+
+    // Record vehicle data for analysis
+    recordVehicleData();
+
+    // Update detectors
+    for (var iDet = 0; iDet < detectors.length; iDet++) {
+        detectors[iDet].update(time, dt);
+    }
+
+    // Zoom back traffic objects if needed
+    if (userCanDropObjects && (!isSmartphone) && (!trafficObjPicked)) {
+        trafficObjs.zoomBack();
+    }
+}
+
+//#############################################################
+// Control Algorithm Functions
+//#############################################################
+
+function applyIDMControl(veh200, veh222) {
+    const s = veh222.u - veh200.u;
+    const gap = (s < 0 ? s + mainroadLen : s) - veh222.length;
+    const deltaV = veh200.speed - veh222.speed;
+
+    // IDM parameters
+    const v0 = 30; // desired speed
+    const T = 1.5; // time headway
+    const a = 1.5; // max acceleration
+    const b = 2.0; // comfortable deceleration
+
+    const desiredGap = 2 + veh200.speed * T + (veh200.speed * deltaV) / (2 * Math.sqrt(a * b));
+    const accel = a * (1 - Math.pow(veh200.speed / v0, 4) - Math.pow(desiredGap / gap, 2));
+
+    veh200.acc = Math.max(-2, Math.min(1.5, accel));
+    veh200.speed += veh200.acc * dt;
+    veh200.speed = Math.max(0, veh200.speed);
+}
+
+function applyRLControl(veh200, veh201, veh222) {
+    // State: [distance to vehicle behind, relative velocity with vehicle behind]
+    let dx222 = veh222.u - veh200.u;
+    if (dx222 < 0) dx222 += mainroadLen;
+    let gapTo222 = dx222 - veh222.length;
+    const s_behind = veh200.u - veh201.u;
+    const rel_v_behind = veh201.speed - veh200.speed;
+    const adjustedDistBehind = s_behind < 0 ? s_behind + mainroadLen : s_behind;
+    const state = [adjustedDistBehind, rel_v_behind, gapTo222];
+
+    rlAgent.act(state).then(action => {
+        const accel = Math.max(-3, Math.min(2, action));
+        veh200.speed += accel * dt;
+        veh200.speed = Math.max(0, veh200.speed);
+        veh200.acc = accel;
+
+        // Calculate reward for RL training
+        if (lastState) {
+            const reward = calculateRLReward(veh200, veh222);
+            rlAgent.remember(lastState, lastAction, reward, state, false);
+            rlAgent.replay();
+        }
+
+        lastState = state;
+        lastAction = action;
+    });
+}
+
+function calculateRLReward(veh200, veh222) {
+    let reward = 0;
+    let collisionPenalty = 0;
+    let smoothnessPenalty = 0;
+    // Penalty for unsafe or unproductive gaps
+    let unsafeGapPenalty = 0;
+    if ((gap > 500 && gap < 850) || (gap >= -2 && gap <= 4)) {
+        unsafeGapPenalty = 5.0;
+    }
+    reward -= unsafeGapPenalty;
+
+    // Safety penalty for gap violations
+    let dx = veh222.u - veh200.u;
+    if (dx < 0) dx += mainroadLen;
+    let gap = dx - 7;
+    if (gap < 0) {
+        collisionPenalty += 5.0; // Penalize overlap
+    }
+
+    // Smoothness penalty for harsh acceleration
+    if (Math.abs(veh200.acc) > 2) {
+        smoothnessPenalty = 1.0;
+    }
+
+    // Flow optimization: Analyze vehicles behind veh200
+    let behindVehicles = mainroad.veh.filter(v => {
+        let du = veh200.u - v.u;
+        if (du < 0) du += mainroadLen;
+        return du > 0 && du < 100; // vehicles within 100m behind
+    });
+
+    let speeds = behindVehicles.map(v => v.speed);
+    let meanSpeed = speeds.length ? speeds.reduce((a, b) => a + b, 0) / speeds.length : 0;
+    let variance = speeds.length ? speeds.reduce((sum, v) => sum + Math.pow(v - meanSpeed, 2), 0) / speeds.length : 0;
+    let stddev = Math.sqrt(variance);
+
+    // Reward: high mean speed, low speed variance, safety, smoothness
+    reward = meanSpeed - stddev - 2 * collisionPenalty - smoothnessPenalty - unsafeGapPenalty;
+    return reward;
+}
+
+//#############################################################
+// Data Recording Functions
+//#############################################################
+
+function recordVehicleData() {
+    if (isRecording && targetVehicleId !== null) {
+        const v = mainroad.veh.find(v => v.id === targetVehicleId);
+        if (v) {
+            updateLoopCount(v.id, v.u);
+            const continuousPosition = getContinuousPosition(v.id, v.u);
+
+            recordingData.push({
+                time: time.toFixed(2),
+                id: v.id,
+                position: continuousPosition.toFixed(2),
+                rawPosition: v.u.toFixed(2),
+                loops: vehicleLoopCounts.get(v.id) || 0,
+                speed: v.speed.toFixed(2),
+                acceleration: v.acc.toFixed(2)
+            });
+        }
+    }
+}
+
+//#############################################################
+// Drawing Function
+//#############################################################
+
+function drawSim() {
+    // Handle responsive design
+    var relTextsize_vmin = isSmartphone ? 0.03 : 0.02;
+    var textsize = relTextsize_vmin * Math.min(canvas.width, canvas.height);
+
+    // Update canvas dimensions if changed
+    if ((canvas.width != simDivWindow.clientWidth) ||
+        (canvas.height != simDivWindow.clientHeight)) {
+        hasChanged = true;
+        canvas.width = simDivWindow.clientWidth;
+        canvas.height = simDivWindow.clientHeight;
+        aspectRatio = canvas.width / canvas.height;
+        refSizePix = Math.min(canvas.height, canvas.width / critAspectRatio);
+        scale = refSizePix / refSizePhys;
+
+        updateDimensions();
+        trafficObjs.calcDepotPositions(canvas);
+    }
+
+    // Reset transform and draw background
+    ctx.setTransform(1, 0, 0, 1, 0, 0);
+    if (drawBackground) {
+        if (hasChanged || (itime <= 10) || (itime % 50 == 0) || userCanvasManip
+            || (!drawRoad) || drawVehIDs) {
+            ctx.drawImage(background, 0, 0, canvas.width, canvas.height);
+        }
+    }
+
+    // Draw road
+    var changedGeometry = userCanvasManip || hasChanged || (itime <= 1);
+    mainroad.draw(roadImg1, roadImg2, changedGeometry);
+    if (drawRoadIDs) { mainroad.drawRoadID(); }
+
+    // Draw vehicles
+    mainroad.drawVehicles(carImg, truckImg, obstacleImgs, vmin_col, vmax_col);
+
+    // Draw traffic objects
+    if (userCanDropObjects && (!isSmartphone)) {
+        trafficObjs.draw();
+    }
+
+    // Draw UI elements
+    ctx.setTransform(1, 0, 0, 1, 0, 0);
+    drawSpeedlBox();
+
+    // Display time and detector information
+    displayTime(time, textsize);
+    for (var iDet = 0; iDet < detectors.length; iDet++) {
+        detectors[iDet].display(textsize);
+    }
+
+    // Show coordinates if activated
+    if (showCoords && mouseInside) {
+        showLogicalCoords(xPixUser, yPixUser);
+    }
+
+    // Draw traffic light editor if active
+    if (trafficLightControl.isActive) {
+        trafficLightControl.showEditPanel();
+    }
+
+    hasChanged = false;
+    ctx.setTransform(1, 0, 0, 1, 0, 0);
+}
+
+//#############################################################
+// UI Update Functions
+//#############################################################
+
+function updateModelIndicator() {
+    const el = document.getElementById("modelIndicator");
+    if (el) {
+        el.textContent = `Controller: ${useIDM ? 'IDM' : 'RL'}`;
+        el.style.color = useIDM ? 'green' : 'blue';
+    }
+}
+
+function updateGapAndLapUI(gap, laps) {
+    const gapEl = document.getElementById("gapInfo");
+    const lapEl = document.getElementById("lapInfo");
+    if (gapEl) {
+        gapEl.textContent = `Gap to veh 222: ${gap.toFixed(2)} m`;
+    }
+    if (lapEl) {
+        lapEl.textContent = `veh 200 Laps: ${laps}`;
+    }
+}
+
+function updateVehicleList() {
+    const container = document.getElementById("vehicleIds");
+    if (!container) return;
+
+    const ids = mainroad.veh.map(v => v.id).sort((a, b) => a - b);
+    if (ids.length === 0) {
+        container.innerHTML = "No vehicles";
+        return;
+    }
+
+    container.innerHTML = ids.map(id =>
+        `<span class="vehicle-id">${id}</span>`
+    ).join('');
+}
+
+//#############################################################
+// Recording Control Functions
+//#############################################################
+
+function toggleRecording() {
+    const input = document.getElementById("targetVehicleId");
+    let id = parseInt(input.value);
+
+    if (isNaN(id)) {
+        id = 200;
+        console.log("No vehicle ID entered. Defaulting to 200.");
+    }
+
+    if (!isRecording) {
+        const exists = mainroad.veh.some(v => v.id === id);
+        if (!exists) {
+            alert(`Vehicle ID ${id} not found.`);
+            return;
+        }
+
+        targetVehicleId = id;
+        recordingData = [];
+
+        // Reset tracking data
+        vehicleLoopCounts.clear();
+        lastPositions.clear();
+
+        // Initialize tracking for target vehicle
+        const targetVehicle = mainroad.veh.find(v => v.id === id);
+        if (targetVehicle) {
+            vehicleLoopCounts.set(id, 0);
+            lastPositions.set(id, targetVehicle.u);
+        }
+
+        isRecording = true;
+        input.disabled = true;
+        document.getElementById("downloadDiv").textContent = "Stop Recording";
+        console.log(`Started recording vehicle ${id}`);
+    } else {
+        isRecording = false;
+        input.disabled = false;
+        document.getElementById("downloadDiv").textContent = "Start Recording";
+        console.log(`Stopped recording. Vehicle completed ${vehicleLoopCounts.get(targetVehicleId) || 0} loops`);
+        downloadCSV();
+    }
+}
+
+function downloadCSV() {
+    console.log("Downloading CSV with", recordingData.length, "rows");
+    if (recordingData.length === 0) {
+        alert("No data recorded.");
+        return;
+    }
+
+    let csv = "Time,VehicleID,ContinuousPosition,RawPosition,CompletedLoops,Speed,Acceleration\n";
+    recordingData.forEach(entry => {
+        csv += `${entry.time},${entry.id},${entry.position},${entry.rawPosition},${entry.loops},${entry.speed},${entry.acceleration}\n`;
+    });
+
+    const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' });
+    const url = URL.createObjectURL(blob);
+
+    const link = document.createElement('a');
+    link.href = url;
+    link.download = `vehicle_${targetVehicleId}_stopgo_data.csv`;
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+}
+
+//#############################################################
+// DQN Agent Class for Reinforcement Learning
+//#############################################################
+
+class DQNAgent {
+    constructor(stateDim, actionSpace) {
+        this.stateDim = stateDim;
+        this.actionSpace = actionSpace;
+        this.epsilon = 1.0;
+        this.epsilonMin = 0.05;
+        this.epsilonDecay = 0.995;
+        this.gamma = 0.95;
+        this.batchSize = 32;
+        this.memory = [];
+        this.model = this.buildModel();
+    }
+
+    buildModel() {
+        const model = tf.sequential();
+        model.add(tf.layers.dense({
+            inputShape: [this.stateDim],
+            units: 24,
+            activation: 'relu'
+        }));
+        model.add(tf.layers.dense({
+            units: 24,
+            activation: 'relu'
+        }));
+        model.add(tf.layers.dense({
+            units: this.actionSpace.length
+        }));
+        model.compile({
+            loss: 'meanSquaredError',
+            optimizer: 'adam'
+        });
+        return model;
+    }
+
+    async act(state) {
+        if (Math.random() < this.epsilon) {
+            return this.actionSpace[Math.floor(Math.random() * this.actionSpace.length)];
+        }
+        const tensor = tf.tensor([state]);
+        const prediction = this.model.predict(tensor);
+        const qValues = await prediction.data();
+        prediction.dispose();
+        tensor.dispose();
+        return this.actionSpace[qValues.indexOf(Math.max(...qValues))];
+    }
+
+    remember(state, action, reward, nextState, done) {
+        this.memory.push({ state, action, reward, nextState, done });
+        if (this.memory.length > 2000) {
+            this.memory.shift();
+        }
+    }
+
+    async replay() {
+        if (this.memory.length < this.batchSize) return;
+
+        const batch = this.memory.sort(() => Math.random() - 0.5).slice(0, this.batchSize);
+
+        const states = batch.map(d => d.state);
+        const nextStates = batch.map(d => d.nextState);
+        const stateTensor = tf.tensor2d(states);
+        const nextStateTensor = tf.tensor2d(nextStates);
+
+        const qValues = this.model.predict(stateTensor);
+        const qNext = this.model.predict(nextStateTensor);
+
+        const qUpdate = qValues.arraySync();
+
+        batch.forEach((d, i) => {
+            const aIndex = this.actionSpace.indexOf(d.action);
+            let target = d.reward;
+            if (!d.done) {
+                target += this.gamma * Math.max(...qNext.arraySync()[i]);
+            }
+            qUpdate[i][aIndex] = target;
+        });
+
+        const qUpdateTensor = tf.tensor2d(qUpdate);
+        await this.model.fit(stateTensor, qUpdateTensor, {
+            epochs: 1,
+            verbose: 0
+        });
+
+        // Clean up tensors
+        stateTensor.dispose();
+        nextStateTensor.dispose();
+        qValues.dispose();
+        qNext.dispose();
+        qUpdateTensor.dispose();
+
+        if (this.epsilon > this.epsilonMin) {
+            this.epsilon *= this.epsilonDecay;
+        }
+    }
+
+    async saveModel(name = "veh200-rl-model") {
+        await this.model.save(`localstorage://${name}`);
+        console.log("Model saved to localStorage");
+    }
+
+    async loadModel(name = "veh200-rl-model") {
+        try {
+            this.model = await tf.loadLayersModel(`localstorage://${name}`);
+            this.model.compile({
+                loss: 'meanSquaredError',
+                optimizer: 'adam'
+            });
+            console.log("Model loaded from localStorage");
+            this.epsilon = this.epsilonMin; // Skip exploration after load
+        } catch (e) {
+            console.warn("No saved model found, starting fresh");
+        }
+    }
+}
+
+//#############################################################
+// Model Management Functions
+//#############################################################
+
+function getModelSizeInKB() {
+    let totalBytes = 0;
+    for (let key in localStorage) {
+        if (key.startsWith("tensorflowjs_models/veh200-rl-model")) {
+            const item = localStorage.getItem(key);
+            totalBytes += item ? item.length * 2 : 0;
+        }
+    }
+    return (totalBytes / 1024).toFixed(1);
+}
+
+function updateModelSizeDisplay() {
+    const size = getModelSizeInKB();
+    const infoEl = document.getElementById("modelSizeInfo");
+    if (infoEl) {
+        infoEl.textContent = `Model size: ${size} KB`;
+    }
+}
+
+// Model control buttons
+document.getElementById("resetModelBtn").onclick = () => {
+    const keys = ["info", "model_topology", "weight_data", "weight_specs", "model_metadata"];
+    keys.forEach(key => {
+        localStorage.removeItem(`tensorflowjs_models/veh200-rl-model/${key}`);
+    });
+    updateModelSizeDisplay();
+    alert("RL model reset. Reload the page to retrain.");
+};
+
+document.getElementById("saveModelBtn").onclick = () => {
+    rlAgent.saveModel().then(() => {
+        updateModelSizeDisplay();
+        alert("Model manually saved.");
+    });
+};
+
+//#############################################################
+// Main Simulation Loop
+//#############################################################
+
+function main_loop() {
+    updateSim();
+    drawSim();
+}
+
+//#############################################################
+// Animation Loop for Smooth Rendering
+//#############################################################
+
+function animationLoop() {
+    drawSim();
+    requestAnimationFrame(animationLoop);
+}
+
+//#############################################################
+// Simulation Startup
+//#############################################################
+
+console.log("Starting Ring Road Stop-and-Go Traffic Simulation");
+showInfo(); // Display initial information
+
+// Start main simulation loop
+var myRun = setInterval(main_loop, 1000 / fps);
+
+// Start animation loop for smooth rendering
+requestAnimationFrame(animationLoop);
