@@ -9,7 +9,7 @@ Information on the used models and numerical integration schemes can be found in
 
 ## explenation about the project
 
-I have recently worked on a project focused on mitigation of phantom traffic congestions using Adaptive Cruise Control on AV's, A ReInforcement Learning based model has been used in this project lots of features have been added in the files mentioned below most of the modifications were inlign with the research goals and have been costumized to meet some certain criteria, at last huge credit to the Movsim team for their awesome simulation platform without them this would have not happened. A matlab file has also been made to sketch the recorded data for further data analysis which has also been uploaded to this repository 
+I have recently worked on a project focused on mitigation of phantom traffic congestions using Adaptive Cruise Control on AV's, A ReInforcement Learning based model has been used in this project lots of features have been added in the files mentioned below most of the modifications were inlign with the research goals and have been costumized to meet some certain criteria, at last huge credit to the Movsim team for their awesome simulation platform without them this would have not happened. A matlab file (figure_sketcher.m) has also been made to sketch the recorded data for further data analysis which has also been uploaded to this repository 
 
 <p align="center">
     <img src="matlab_figure.png" alt="Icon" />
