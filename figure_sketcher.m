@@ -1,6 +1,6 @@
 % ---------- IDM DATA ----------
 % Load the CSV file (ensure it's in your MATLAB path or working dir)
-data = readtable("C:\Users\mtaha\Downloads\vehicle_200_stopgo_data.csv");
+data = readtable("your_recorded_data_1.csv");
 
 % Convert to numeric arrays
 time = data{:, "Time"};
@@ -52,7 +52,7 @@ annotation('textbox', [0.1, 0.01, 0.8, 0.05], ...
 
 % ---------- RL-Model DATA ----------
 % Load the CSV file
-data = readtable("C:\Users\mtaha\Downloads\vehicle_200_continuous_data (15).csv");
+data = readtable("your_recorded_data_2.csv");
 
 % Convert to numeric arrays
 time = data{:, "Time"};
