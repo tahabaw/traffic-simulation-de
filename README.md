@@ -17,7 +17,7 @@ I have recently worked on a project focused on mitigation of phantom traffic con
 
 ## ring.html
 
-Due all respect i have for your awesome test bed i have made some modifications so that it alligns with my research on stop and go traffic waves and paths to its mitigaion The ring.html has been enhanced some of the extra features have been deleted just to make space for the purpose specific usage (RL-modeling for vehicle IDs and other function buttons in the bottom segment of the page) each of details and functions will be explained further with more detail below. changes made:
+Due all respect i have for the awesome test bed i have made some modifications so that it alligns with my research on stop and go traffic waves and paths to its mitigaion The ring.html has been enhanced some of the extra features have been deleted just to make space for the purpose specific usage (RL-modeling for vehicle IDs and other function buttons in the bottom segment of the page) each of details and functions will be explained further with more detail below. changes made:
 
 an ID section has been added in the top right corner that indicated the ids of the vehicles
 now the record data button records the movement of one veh by its id instead of all of them, you could also write in the id of the vehicle but if you leave it empty it would do veh 200 by default this way you can make better analysis on driving behaviors specially if you are implementing a costumized model like me.
