@@ -11,6 +11,10 @@ Information on the used models and numerical integration schemes can be found in
 
 I have recently worked on a project focused on mitigation of phantom traffic congestions using Adaptive Cruise Control on AV's, A ReInforcement Learning based model has been used in this project lots of features have been added in the files mentioned below most of the modifications were inlign with the research goals and have been costumized to meet some certain criteria, at last huge credit to the Movsim team for their awesome simulation platform without them this would have not happened. A matlab file has also been made to sketch the recorded data for further data analysis which has also been uploaded to this repository 
 
+<p align="center">
+    <img src="favicon.png" alt="Icon" />
+</p>
+
 ## ring.html
 
 Due all respect i have for your awesome test bed i have made some modifications so that it alligns with my research on stop and go traffic waves and paths to its mitigaion The ring.html has been enhanced some of the extra features have been deleted just to make space for the purpose specific usage (RL-modeling for vehicle IDs and other function buttons in the bottom segment of the page) each of details and functions will be explained further with more detail below. changes made:
