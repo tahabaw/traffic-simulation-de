@@ -25,6 +25,10 @@ there are bunch of other buttons which self explain. like the local RL model and
 controller type when you are using a hybrid model
 laps for counting during recording data so you have track of how many laps have been taken by veh 200 (leading veh)
 
+<p align="center">
+    <img src="UI.png" alt="Icon" />
+</p>
+
 ## ring.js file
 
 In this section i have made a costumized self trained unsupervized RL model for veh id 200 that updates itself on each run and is stored locally in the browser. also a lot of research alligned costumized enhancements have been done that have been explained in detail in the upper directories ring.html running the code is highly suggest to visually see the changes made. most of the buttons functionality have been declared here.
