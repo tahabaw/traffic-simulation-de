@@ -26,7 +26,7 @@ controller type when you are using a hybrid model
 laps for counting during recording data so you have track of how many laps have been taken by veh 200 (leading veh)
 
 <p align="center">
-    <img src="UI.png" alt="Icon" />
+    <img src="Screenshot 2025-07-26 020904.png" alt="Icon" />
 </p>
 
 ## ring.js file
